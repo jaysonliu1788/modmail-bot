@@ -45,14 +45,20 @@ async def on_message(message: discord.Message):
 
     if isinstance(message.channel, discord.DMChannel):
         guild = bot.get_guild(STAFF_GUILD_ID)
+        if guild is None:
+            print("❌ Staff guild not found. Check STAFF_GUILD_ID and ensure the bot is in the server.")
+            return
+
         category = discord.utils.get(guild.categories, id=ACTIVE_ID)
+        if category is None:
+            print("❌ Active category not found. Check CATEGORY_ACTIVE_ID")
+            return
+
         log_channel = guild.get_channel(LOG_CHANNEL_ID)
 
-        # Create new thread
+        # Create new thread if needed
         if message.author.id not in active_threads:
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False)
-            }
+            overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
             channel = await guild.create_text_channel(
                 name=f"modmail-{message.author.name}",
                 category=category,
@@ -72,7 +78,7 @@ async def on_message(message: discord.Message):
 
             await message.author.send(embed=discord.Embed(
                 title="ModMail Opened",
-                description="Your message has been sent to the staff team.",
+                description="Your message has been sent to staff. You can reply here.",
                 color=discord.Color.green()
             ))
 
@@ -107,6 +113,10 @@ async def reply_cmd(ctx, user_id: int, *, message):
 async def open_modmail(interaction: discord.Interaction, user: discord.User):
     guild = bot.get_guild(STAFF_GUILD_ID)
     category = discord.utils.get(guild.categories, id=ACTIVE_ID)
+    if not guild or not category:
+        await interaction.response.send_message("❌ Guild or category not found.", ephemeral=True)
+        return
+
     if user.id in active_threads:
         await interaction.response.send_message("❌ User already has an open ModMail.", ephemeral=True)
         return
@@ -134,7 +144,10 @@ async def close_modmail(interaction: discord.Interaction):
     log_channel = guild.get_channel(LOG_CHANNEL_ID)
     channel = interaction.channel
 
-    # Find user linked
+    if not guild or not closed_cat:
+        await interaction.response.send_message("❌ Guild or Closed category not found.", ephemeral=True)
+        return
+
     user_id = None
     for uid, cid in active_threads.items():
         if cid == channel.id:
@@ -150,7 +163,6 @@ async def close_modmail(interaction: discord.Interaction):
             color=discord.Color.red()
         ))
 
-    # Move to Closed category
     await channel.edit(name=f"closed-{channel.name}", category=closed_cat)
     embed = discord.Embed(
         title="📕 Thread Closed",
@@ -169,6 +181,9 @@ async def close_modmail(interaction: discord.Interaction):
 async def archive_modmail(interaction: discord.Interaction):
     guild = bot.get_guild(STAFF_GUILD_ID)
     archive_cat = discord.utils.get(guild.categories, id=ARCHIVE_ID)
+    if not guild or not archive_cat:
+        await interaction.response.send_message("❌ Guild or Archive category not found.", ephemeral=True)
+        return
     await interaction.channel.edit(category=archive_cat)
     await interaction.response.send_message("✅ Thread archived.", ephemeral=True)
 
@@ -190,6 +205,10 @@ async def lock_modmail(interaction: discord.Interaction):
 async def claim_modmail(interaction: discord.Interaction):
     guild = bot.get_guild(STAFF_GUILD_ID)
     claimed_cat = discord.utils.get(guild.categories, id=CLAIMED_ID)
+    if not guild or not claimed_cat:
+        await interaction.response.send_message("❌ Guild or Claimed category not found.", ephemeral=True)
+        return
+
     claimed_threads[interaction.channel.id] = interaction.user.id
     await interaction.channel.edit(category=claimed_cat)
     embed = discord.Embed(
