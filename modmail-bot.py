@@ -5,27 +5,29 @@ from dotenv import load_dotenv
 import os
 
 # ------------------------
-# Load environment variables
+# Load environment
 # ------------------------
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 STAFF_GUILD_ID = int(os.getenv("STAFF_GUILD_ID"))
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))
-MODMAIL_CATEGORY_ID = int(os.getenv("MODMAIL_CATEGORY_ID"))
-ARCHIVE_CATEGORY_ID = int(os.getenv("ARCHIVE_CATEGORY_ID"))
+ACTIVE_ID = int(os.getenv("CATEGORY_ACTIVE_ID"))
+ARCHIVE_ID = int(os.getenv("CATEGORY_ARCHIVE_ID"))
+CLOSED_ID = int(os.getenv("CATEGORY_CLOSED_ID"))
+CLAIMED_ID = int(os.getenv("CATEGORY_CLAIMED_ID"))
 PREFIX = os.getenv("PREFIX", "?")
 
 # ------------------------
-# Setup bot
+# Bot setup
 # ------------------------
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
-active_threads = {}  # user_id : channel_id
-claimed_threads = {} # channel_id : staff_id
+active_threads = {}  # user_id -> channel_id
+claimed_threads = {} # channel_id -> staff_id
 
 # ------------------------
-# On Ready
+# Ready
 # ------------------------
 @bot.event
 async def on_ready():
@@ -34,23 +36,19 @@ async def on_ready():
     print("✅ Slash commands synced")
 
 # ------------------------
-# Handle DMs
+# DM handler
 # ------------------------
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # Handle DMs
     if isinstance(message.channel, discord.DMChannel):
         guild = bot.get_guild(STAFF_GUILD_ID)
-        if guild is None:
-            print("❌ Error: Staff guild not found.")
-            return
-
-        category = discord.utils.get(guild.categories, id=MODMAIL_CATEGORY_ID)
+        category = discord.utils.get(guild.categories, id=ACTIVE_ID)
         log_channel = guild.get_channel(LOG_CHANNEL_ID)
 
+        # Create new thread
         if message.author.id not in active_threads:
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False)
@@ -63,31 +61,32 @@ async def on_message(message: discord.Message):
             )
             active_threads[message.author.id] = channel.id
 
-            embed = discord.Embed(
+            embed_open = discord.Embed(
                 title="📬 New ModMail Opened",
                 description=f"**User:** {message.author} ({message.author.id})",
                 color=discord.Color.blue()
             )
-            await channel.send(embed=embed)
+            await channel.send(embed=embed_open)
             if log_channel:
-                await log_channel.send(embed=embed)
+                await log_channel.send(embed=embed_open)
+
             await message.author.send(embed=discord.Embed(
                 title="ModMail Opened",
-                description="Your message has been sent to staff. You can reply here to continue.",
+                description="Your message has been sent to the staff team.",
                 color=discord.Color.green()
             ))
 
-        # Forward message to staff
-        guild_channel = guild.get_channel(active_threads[message.author.id])
-        if guild_channel:
+        # Forward user message
+        channel = guild.get_channel(active_threads[message.author.id])
+        if channel:
             embed = discord.Embed(description=message.content, color=discord.Color.blurple())
             embed.set_author(name=message.author, icon_url=message.author.display_avatar)
-            await guild_channel.send(embed=embed)
+            await channel.send(embed=embed)
 
     await bot.process_commands(message)
 
 # ------------------------
-# Staff reply (prefix)
+# ?reply (prefix)
 # ------------------------
 @bot.command(name="reply")
 async def reply_cmd(ctx, user_id: int, *, message):
@@ -103,11 +102,11 @@ async def reply_cmd(ctx, user_id: int, *, message):
 # ------------------------
 # /open
 # ------------------------
-@bot.tree.command(name="open", description="Manually open a ModMail thread with a user.")
-@app_commands.describe(user="User to open ModMail with")
+@bot.tree.command(name="open", description="Manually open a ModMail thread.")
+@app_commands.describe(user="User to open with")
 async def open_modmail(interaction: discord.Interaction, user: discord.User):
     guild = bot.get_guild(STAFF_GUILD_ID)
-    category = discord.utils.get(guild.categories, id=MODMAIL_CATEGORY_ID)
+    category = discord.utils.get(guild.categories, id=ACTIVE_ID)
     if user.id in active_threads:
         await interaction.response.send_message("❌ User already has an open ModMail.", ephemeral=True)
         return
@@ -118,7 +117,6 @@ async def open_modmail(interaction: discord.Interaction, user: discord.User):
         topic=f"Manual ModMail for {user} ({user.id})"
     )
     active_threads[user.id] = channel.id
-
     await channel.send(embed=discord.Embed(
         title="📬 ModMail Opened",
         description=f"Opened manually for {user.mention}",
@@ -129,13 +127,14 @@ async def open_modmail(interaction: discord.Interaction, user: discord.User):
 # ------------------------
 # /close
 # ------------------------
-@bot.tree.command(name="close", description="Close the current ModMail thread.")
+@bot.tree.command(name="close", description="Close this ModMail thread.")
 async def close_modmail(interaction: discord.Interaction):
+    guild = bot.get_guild(STAFF_GUILD_ID)
+    closed_cat = discord.utils.get(guild.categories, id=CLOSED_ID)
+    log_channel = guild.get_channel(LOG_CHANNEL_ID)
     channel = interaction.channel
-    if channel.category_id != MODMAIL_CATEGORY_ID:
-        await interaction.response.send_message("❌ This is not a ModMail thread.", ephemeral=True)
-        return
 
+    # Find user linked
     user_id = None
     for uid, cid in active_threads.items():
         if cid == channel.id:
@@ -151,23 +150,32 @@ async def close_modmail(interaction: discord.Interaction):
             color=discord.Color.red()
         ))
 
-    await channel.edit(name=f"closed-{channel.name}", category=None)
+    # Move to Closed category
+    await channel.edit(name=f"closed-{channel.name}", category=closed_cat)
+    embed = discord.Embed(
+        title="📕 Thread Closed",
+        description=f"Closed by {interaction.user.mention}",
+        color=discord.Color.red()
+    )
+    await channel.send(embed=embed)
+    if log_channel:
+        await log_channel.send(embed=embed)
     await interaction.response.send_message("✅ Thread closed.", ephemeral=True)
 
 # ------------------------
 # /archive
 # ------------------------
-@bot.tree.command(name="archive", description="Archive the current ModMail thread.")
+@bot.tree.command(name="archive", description="Move this ModMail to Archive.")
 async def archive_modmail(interaction: discord.Interaction):
     guild = bot.get_guild(STAFF_GUILD_ID)
-    category = discord.utils.get(guild.categories, id=ARCHIVE_CATEGORY_ID)
-    await interaction.channel.edit(category=category)
+    archive_cat = discord.utils.get(guild.categories, id=ARCHIVE_ID)
+    await interaction.channel.edit(category=archive_cat)
     await interaction.response.send_message("✅ Thread archived.", ephemeral=True)
 
 # ------------------------
 # /lock
 # ------------------------
-@bot.tree.command(name="lock", description="Lock the current ModMail thread.")
+@bot.tree.command(name="lock", description="Lock this ModMail thread.")
 async def lock_modmail(interaction: discord.Interaction):
     overwrites = interaction.channel.overwrites
     for role in overwrites:
@@ -180,8 +188,20 @@ async def lock_modmail(interaction: discord.Interaction):
 # ------------------------
 @bot.tree.command(name="claim", description="Claim this ModMail thread.")
 async def claim_modmail(interaction: discord.Interaction):
+    guild = bot.get_guild(STAFF_GUILD_ID)
+    claimed_cat = discord.utils.get(guild.categories, id=CLAIMED_ID)
     claimed_threads[interaction.channel.id] = interaction.user.id
-    await interaction.response.send_message(f"✅ Claimed by {interaction.user.mention}", ephemeral=False)
+    await interaction.channel.edit(category=claimed_cat)
+    embed = discord.Embed(
+        title="👤 Thread Claimed",
+        description=f"Claimed by {interaction.user.mention}",
+        color=discord.Color.gold()
+    )
+    await interaction.channel.send(embed=embed)
+    log_channel = guild.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        await log_channel.send(embed=embed)
+    await interaction.response.send_message("✅ Claimed.", ephemeral=True)
 
 # ------------------------
 # /add
@@ -195,7 +215,7 @@ async def add_user(interaction: discord.Interaction, user: discord.User):
         description=f"You were added by {interaction.user.mention}.",
         color=discord.Color.yellow()
     ))
-    await interaction.response.send_message(f"✅ Added {user.mention} to thread.", ephemeral=True)
+    await interaction.response.send_message(f"✅ Added {user.mention}.", ephemeral=True)
 
 # ------------------------
 # /userinfo
